@@ -4,6 +4,6 @@
   "private": true,
   "scripts": {
     "dev": "npm run dev --prefix project",
-    "build": "npm run build --prefix project"
+    "build": "cd project && npm install && npm run build"
   }
 }
