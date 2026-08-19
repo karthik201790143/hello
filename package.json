@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "bsdk": "npm run dev --prefix project",
     "dev": "npm run dev --prefix project",
     "build": "npm run build --prefix project"
   }
