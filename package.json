@@ -1,0 +1,10 @@
+{
+  "name": "hvpnl-transmission-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "npm run dev --prefix project",
+    "dev": "npm run dev --prefix project",
+    "build": "npm run build --prefix project"
+  }
+}
