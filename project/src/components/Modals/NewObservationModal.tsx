@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useDashboard } from '../../context/DashboardContext';
 import { ObservationSeverity, ObservationStatus, VoltageLevel } from '../../types';
-import { CIRCLES } from '../../data/mockData';
+import { CIRCLES } from '../../constants/gridConstants';
 import { PlusCircle, X, Check } from 'lucide-react';
 
 export const NewObservationModal: React.FC = () => {

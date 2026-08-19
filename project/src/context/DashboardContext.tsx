@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Substation,
   TransmissionLine,
@@ -13,16 +13,17 @@ import {
   TimePeriod,
   ObservationStatus,
 } from '../types';
+import { supabase } from '../lib/supabaseClient';
 import {
-  mockSubstations,
-  mockTransmissionLines,
-  mockTransformers,
-  mockObservations,
-  mockMaintenanceRecords,
-  mockOutageEvents,
-  mockAlerts,
-  mockNotifications,
-} from '../data/mockData';
+  mapToSubstation,
+  mapToTransmissionLine,
+  mapToTransformer,
+  mapToObservation,
+  mapToMaintenanceRecord,
+  mapToOutageEvent,
+  mapToGridAlert,
+  mapToNotification,
+} from '../lib/supabaseAdapters';
 
 interface DashboardContextType {
   // Navigation
@@ -49,6 +50,8 @@ interface DashboardContextType {
   lastDataRefresh: string;
   triggerDataRefresh: () => void;
   isRefreshing: boolean;
+  isSupabaseConnected: boolean;
+  isLoading: boolean;
 
   // Datasets
   substations: Substation[];
@@ -86,14 +89,14 @@ interface DashboardContextType {
   };
 
   // Actions & Updates
-  addObservation: (obs: Omit<Observation, 'id' | 'observationNo' | 'daysPending'>) => void;
-  updateObservationStatus: (id: string, status: ObservationStatus, remarks?: string) => void;
-  addMaintenanceRecord: (rec: Omit<MaintenanceRecord, 'id'>) => void;
-  markMaintenanceDone: (id: string) => void;
-  acknowledgeAlert: (id: string) => void;
-  acknowledgeAllAlerts: () => void;
-  markNotificationRead: (id: string) => void;
-  markAllNotificationsRead: () => void;
+  addObservation: (obs: Omit<Observation, 'id' | 'observationNo' | 'daysPending'>) => Promise<void>;
+  updateObservationStatus: (id: string, status: ObservationStatus, remarks?: string) => Promise<void>;
+  addMaintenanceRecord: (rec: Omit<MaintenanceRecord, 'id'>) => Promise<void>;
+  markMaintenanceDone: (id: string) => Promise<void>;
+  acknowledgeAlert: (id: string) => Promise<void>;
+  acknowledgeAllAlerts: () => Promise<void>;
+  markNotificationRead: (id: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
 
   // Modals & Drawers
   selectedSubstation: Substation | null;
@@ -138,20 +141,22 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [liveFrequency, setLiveFrequency] = useState(50.02);
   const [liveTotalLoadMW, setLiveTotalLoadMW] = useState(6245);
   const [liveGridAvailability] = useState(99.48);
-  const [liveTrippingsCount, setLiveTrippingsCount] = useState(128);
+  const [liveTrippingsCount] = useState(128);
   const [isLiveStreaming, setIsLiveStreaming] = useState(true);
   const [lastDataRefresh, setLastDataRefresh] = useState('20-May-2026 10:30 AM');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSupabaseConnected, setIsSupabaseConnected] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Datasets state (dynamic & mutable)
-  const [substationsList] = useState<Substation[]>(mockSubstations);
-  const [linesList] = useState<TransmissionLine[]>(mockTransmissionLines);
-  const [transformersList] = useState<Transformer[]>(mockTransformers);
-  const [observationsList, setObservationsList] = useState<Observation[]>(mockObservations);
-  const [maintenanceList, setMaintenanceList] = useState<MaintenanceRecord[]>(mockMaintenanceRecords);
-  const [outageList, setOutageList] = useState<OutageEvent[]>(mockOutageEvents);
-  const [alertsList, setAlertsList] = useState<GridAlert[]>(mockAlerts);
-  const [notificationsList, setNotificationsList] = useState<NotificationItem[]>(mockNotifications);
+  // Datasets state
+  const [substationsList, setSubstationsList] = useState<Substation[]>([]);
+  const [linesList, setLinesList] = useState<TransmissionLine[]>([]);
+  const [transformersList, setTransformersList] = useState<Transformer[]>([]);
+  const [observationsList, setObservationsList] = useState<Observation[]>([]);
+  const [maintenanceList, setMaintenanceList] = useState<MaintenanceRecord[]>([]);
+  const [outageList, setOutageList] = useState<OutageEvent[]>([]);
+  const [alertsList, setAlertsList] = useState<GridAlert[]>([]);
+  const [notificationsList, setNotificationsList] = useState<NotificationItem[]>([]);
 
   // Modals state
   const [selectedSubstation, setSelectedSubstation] = useState<Substation | null>(null);
@@ -163,18 +168,63 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [selectedMapCity, setSelectedMapCity] = useState<string | null>(null);
 
+  // Fetch live datasets directly from Supabase
+  const loadDataFromSupabase = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const [
+        { data: subsData },
+        { data: linesData },
+        { data: trData },
+        { data: obsData },
+        { data: mntData },
+        { data: outData },
+        { data: altData },
+        { data: notData },
+      ] = await Promise.all([
+        supabase.from('substations').select('*'),
+        supabase.from('transmission_lines').select('*'),
+        supabase.from('transformers').select('*'),
+        supabase.from('observations').select('*'),
+        supabase.from('maintenance_records').select('*'),
+        supabase.from('outage_events').select('*'),
+        supabase.from('grid_alerts').select('*'),
+        supabase.from('notifications').select('*'),
+      ]);
+
+      if (subsData) setSubstationsList(subsData.map(mapToSubstation));
+      if (linesData) setLinesList(linesData.map(mapToTransmissionLine));
+      if (trData) setTransformersList(trData.map(mapToTransformer));
+      if (obsData) setObservationsList(obsData.map(mapToObservation));
+      if (mntData) setMaintenanceList(mntData.map(mapToMaintenanceRecord));
+      if (outData) setOutageList(outData.map(mapToOutageEvent));
+      if (altData) setAlertsList(altData.map(mapToGridAlert));
+      if (notData) setNotificationsList(notData.map(mapToNotification));
+
+      setIsSupabaseConnected(true);
+    } catch (err) {
+      console.error('Error fetching data from Supabase:', err);
+      setIsSupabaseConnected(false);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Initial load on startup
+  useEffect(() => {
+    loadDataFromSupabase();
+  }, [loadDataFromSupabase]);
+
   // Live frequency & load fluctuation timer
   useEffect(() => {
     if (!isLiveStreaming) return;
     const interval = setInterval(() => {
-      // Oscillate frequency smoothly between 49.94 Hz and 50.06 Hz
       const freqDelta = (Math.random() - 0.5) * 0.03;
       setLiveFrequency(prev => {
         const next = Number((prev + freqDelta).toFixed(2));
         return next < 49.85 ? 49.92 : next > 50.15 ? 50.08 : next;
       });
 
-      // Fluctuate load between 6190 MW and 6320 MW
       const loadDelta = Math.round((Math.random() - 0.5) * 16);
       setLiveTotalLoadMW(prev => {
         const next = prev + loadDelta;
@@ -205,17 +255,16 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setTimeout(() => setFilterAppliedNotification(null), 3500);
   };
 
-  const triggerDataRefresh = () => {
+  const triggerDataRefresh = async () => {
     setIsRefreshing(true);
-    setTimeout(() => {
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-      setLastDataRefresh(`${dateStr} ${timeStr}`);
-      setIsRefreshing(false);
-      setFilterAppliedNotification('SCADA Telemetry & Asset Data refreshed from HVPNL servers.');
-      setTimeout(() => setFilterAppliedNotification(null), 3000);
-    }, 600);
+    await loadDataFromSupabase();
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    setLastDataRefresh(`${dateStr} ${timeStr}`);
+    setIsRefreshing(false);
+    setFilterAppliedNotification('Refreshed data directly from Supabase.');
+    setTimeout(() => setFilterAppliedNotification(null), 3000);
   };
 
   // Filtered Datasets based on current active filters
@@ -227,7 +276,7 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (filters.voltageLevel !== 'All Voltages' && ss.voltage !== filters.voltageLevel) return false;
       if (filters.searchQuery) {
         const q = filters.searchQuery.toLowerCase();
-        return ss.name.toLowerCase().includes(q) || ss.code.toLowerCase().includes(q) || ss.circle.toLowerCase().includes(q);
+        return ss.name?.toLowerCase().includes(q) || ss.code?.toLowerCase().includes(q) || ss.circle?.toLowerCase().includes(q);
       }
       return true;
     });
@@ -240,7 +289,7 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (filters.voltageLevel !== 'All Voltages' && line.voltage !== filters.voltageLevel) return false;
       if (filters.searchQuery) {
         const q = filters.searchQuery.toLowerCase();
-        return line.name.toLowerCase().includes(q) || line.code.toLowerCase().includes(q) || line.circle.toLowerCase().includes(q);
+        return line.name?.toLowerCase().includes(q) || line.code?.toLowerCase().includes(q) || line.circle?.toLowerCase().includes(q);
       }
       return true;
     });
@@ -252,7 +301,7 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (filters.circle !== 'All Circles' && tr.circle !== filters.circle) return false;
       if (filters.searchQuery) {
         const q = filters.searchQuery.toLowerCase();
-        return tr.name.toLowerCase().includes(q) || tr.substationName.toLowerCase().includes(q) || tr.circle.toLowerCase().includes(q);
+        return tr.name?.toLowerCase().includes(q) || tr.substationName?.toLowerCase().includes(q) || tr.circle?.toLowerCase().includes(q);
       }
       return true;
     });
@@ -266,10 +315,10 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (filters.searchQuery) {
         const q = filters.searchQuery.toLowerCase();
         return (
-          obs.observationNo.toLowerCase().includes(q) ||
-          obs.substation.toLowerCase().includes(q) ||
-          obs.equipment.toLowerCase().includes(q) ||
-          obs.description.toLowerCase().includes(q)
+          obs.observationNo?.toLowerCase().includes(q) ||
+          obs.substation?.toLowerCase().includes(q) ||
+          obs.equipment?.toLowerCase().includes(q) ||
+          obs.description?.toLowerCase().includes(q)
         );
       }
       return true;
@@ -278,102 +327,99 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const filteredMaintenance = useMemo(() => {
     return maintenanceList.filter(m => {
+      if (filters.financialYear && m.financialYear !== filters.financialYear) return false;
       if (filters.zone !== 'All Zones' && m.zone !== filters.zone) return false;
       if (filters.circle !== 'All Circles' && m.circle !== filters.circle) return false;
       if (filters.maintenanceCycle !== 'All Cycles' && m.cycle !== filters.maintenanceCycle) return false;
-      if (filters.financialYear && m.financialYear !== filters.financialYear) return false;
+      if (filters.assetType !== 'All Assets' && m.assetType !== filters.assetType) return false;
       if (filters.searchQuery) {
         const q = filters.searchQuery.toLowerCase();
-        return m.assetName.toLowerCase().includes(q) || m.substation.toLowerCase().includes(q);
+        return m.assetName?.toLowerCase().includes(q) || m.substation?.toLowerCase().includes(q) || m.engineerInCharge?.toLowerCase().includes(q);
       }
       return true;
     });
   }, [maintenanceList, filters]);
 
   const filteredOutages = useMemo(() => {
-    return outageList.filter(ev => {
-      if (filters.circle !== 'All Circles' && ev.circle !== filters.circle) return false;
-      if (filters.voltageLevel !== 'All Voltages' && ev.voltage !== filters.voltageLevel) return false;
+    return outageList.filter(o => {
+      if (filters.circle !== 'All Circles' && o.circle !== filters.circle) return false;
+      if (filters.voltageLevel !== 'All Voltages' && o.voltage !== filters.voltageLevel) return false;
+      if (filters.assetType !== 'All Assets' && o.assetType !== filters.assetType) return false;
       if (filters.searchQuery) {
         const q = filters.searchQuery.toLowerCase();
-        return ev.assetName.toLowerCase().includes(q) || ev.cause.toLowerCase().includes(q) || ev.id.toLowerCase().includes(q);
+        return o.assetName?.toLowerCase().includes(q) || o.cause?.toLowerCase().includes(q);
       }
       return true;
     });
   }, [outageList, filters]);
 
-  // Summary Metrics Dynamic Calculation
+  // Dynamic Calculated Summary Metrics
   const summaryMetrics = useMemo(() => {
-    const isGlobal = filters.circle === 'All Circles' && filters.zone === 'All Zones' && filters.voltageLevel === 'All Voltages';
+    const totalSubstations = filteredSubstations.length;
+    const totalLines = filteredLines.length;
+    const totalTransformers = filteredTransformers.length;
+    const totalCapacityMVA = filteredSubstations.reduce((acc, ss) => acc + (Number(ss.capacityMVA) || 0), 0);
 
-    // Scale proportional metrics when specific circle is selected, or use benchmark counts
-    const totalSubstations = isGlobal ? 178 : filteredSubstations.length * 12;
-    const totalLines = isGlobal ? 8893 : Math.round(filteredLines.reduce((acc, l) => acc + l.lengthKm, 0) * 15);
-    const totalTransformers = isGlobal ? 312 : filteredTransformers.length * 24;
-    const totalCapacityMVA = isGlobal ? 12540 : Math.round(filteredSubstations.reduce((acc, s) => acc + s.capacityMVA, 0) * 2.2);
+    const maintenanceDone = filteredMaintenance.filter(m => m.status === 'Done').length;
+    const maintenancePending = filteredMaintenance.filter(m => m.status === 'Pending').length;
+    const maintenanceOverdue = filteredMaintenance.filter(m => m.status === 'Overdue').length;
+    const maintenanceDue = maintenancePending + maintenanceOverdue;
+    const totalMnt = filteredMaintenance.length;
+    const maintenanceCompletionPct = totalMnt > 0 ? Number(((maintenanceDone / totalMnt) * 100).toFixed(1)) : 0;
 
-    // Maintenance Metrics
-    const maintenanceDue = isGlobal ? 4856 : Math.round(4856 * (filteredSubstations.length / 13));
-    const maintenanceDone = isGlobal ? 3421 : Math.round(3421 * (filteredSubstations.length / 13));
-    const maintenancePending = maintenanceDue - maintenanceDone;
-    const maintenanceOverdue = isGlobal ? 246 : Math.round(246 * (filteredSubstations.length / 13));
-    const maintenanceCompletionPct = Number(((maintenanceDone / (maintenanceDue || 1)) * 100).toFixed(2));
+    const totalObservations = filteredObservations.length;
+    const observationsPending = filteredObservations.filter(o => o.status === 'Pending' || o.status === 'Under Rectification').length;
+    const criticalPendingCount = filteredObservations.filter(o => o.status === 'Critical Pending').length;
+    const observationsClosed = filteredObservations.filter(o => o.status === 'Closed').length;
+    const observationsOverdue = filteredObservations.filter(o => o.daysPending > 15 && o.status !== 'Closed').length;
+    const mpCompliancePct = totalObservations > 0 ? Number(((observationsClosed / totalObservations) * 100).toFixed(1)) : 0;
 
-    // M&P Observation Metrics
-    const totalObservations = isGlobal ? 2374 : Math.round(2374 * (filteredObservations.length / 8));
-    const criticalPendingCount = isGlobal ? 198 : filteredObservations.filter(o => o.status === 'Critical Pending').length * 25;
-    const observationsClosed = isGlobal ? 1058 : Math.round(1058 * (filteredObservations.length / 8));
-    const observationsPending = totalObservations - observationsClosed;
-    const observationsOverdue = isGlobal ? 162 : Math.round(162 * (filteredObservations.length / 8));
-    const mpCompliancePct = Number(((observationsClosed / (totalObservations || 1)) * 100).toFixed(2));
-
-    // Health breakdowns
     const substationHealthBreakdown = {
-      healthy: Math.round(totalSubstations * 0.517),
-      moderate: Math.round(totalSubstations * 0.326),
-      critical: Math.round(totalSubstations * 0.112),
-      outage: Math.max(1, Math.round(totalSubstations * 0.045)),
+      healthy: filteredSubstations.filter(s => s.health === 'Healthy').length,
+      moderate: filteredSubstations.filter(s => s.health === 'Moderate').length,
+      critical: filteredSubstations.filter(s => s.health === 'Critical').length,
+      outage: filteredSubstations.filter(s => s.health === 'Outage').length,
     };
 
     const transformerHealthBreakdown = {
-      healthy: Math.round(totalTransformers * 0.58),
-      moderate: Math.round(totalTransformers * 0.28),
-      critical: Math.round(totalTransformers * 0.10),
-      outage: Math.max(1, Math.round(totalTransformers * 0.04)),
+      healthy: filteredTransformers.filter(t => t.healthStatus === 'Healthy').length,
+      moderate: filteredTransformers.filter(t => t.healthStatus === 'Moderate').length,
+      critical: filteredTransformers.filter(t => t.healthStatus === 'Critical').length,
+      outage: filteredTransformers.filter(t => t.healthStatus === 'Outage').length,
     };
 
     const lineHealthBreakdown = {
-      healthy: Math.round(totalLines * 0.72),
-      moderate: Math.round(totalLines * 0.21),
-      critical: Math.round(totalLines * 0.05),
-      outage: Math.round(totalLines * 0.02),
+      healthy: filteredLines.filter(l => l.status === 'In Service').length,
+      moderate: 0,
+      critical: filteredLines.filter(l => l.status === 'Under Maintenance').length,
+      outage: filteredLines.filter(l => l.status === 'Tripped').length,
     };
 
     const transformerLoadingBreakdown = {
-      under60: Math.round(totalTransformers * 0.365),
-      between60_80: Math.round(totalTransformers * 0.497),
-      between80_100: Math.round(totalTransformers * 0.099),
-      over100: Math.round(totalTransformers * 0.038),
-      avgLoading: 68,
+      under60: filteredTransformers.filter(t => t.loadingPct < 60).length,
+      between60_80: filteredTransformers.filter(t => t.loadingPct >= 60 && t.loadingPct <= 80).length,
+      between80_100: filteredTransformers.filter(t => t.loadingPct > 80 && t.loadingPct <= 100).length,
+      over100: filteredTransformers.filter(t => t.loadingPct > 100).length,
+      avgLoading: totalTransformers > 0 ? Math.round(filteredTransformers.reduce((acc, t) => acc + (Number(t.loadingPct) || 0), 0) / totalTransformers) : 0,
     };
 
-    const cycleMultiplier = isGlobal ? 1 : filteredSubstations.length / 13;
-    const cycleWiseMaintenance = [
-      { cycle: 'Annual', total: Math.round(1152 * cycleMultiplier), done: Math.round(832 * cycleMultiplier), pending: Math.round(320 * cycleMultiplier), overdue: Math.round(48 * cycleMultiplier) },
-      { cycle: 'Half Yearly', total: Math.round(1246 * cycleMultiplier), done: Math.round(916 * cycleMultiplier), pending: Math.round(330 * cycleMultiplier), overdue: Math.round(62 * cycleMultiplier) },
-      { cycle: 'Quarterly', total: Math.round(1284 * cycleMultiplier), done: Math.round(918 * cycleMultiplier), pending: Math.round(366 * cycleMultiplier), overdue: Math.round(74 * cycleMultiplier) },
-      { cycle: 'Monthly', total: Math.round(1174 * cycleMultiplier), done: Math.round(755 * cycleMultiplier), pending: Math.round(419 * cycleMultiplier), overdue: Math.round(62 * cycleMultiplier) },
-    ];
+    const cycles = ['Annual', 'Half Yearly', 'Quarterly', 'Monthly'];
+    const cycleWiseMaintenance = cycles.map(cycle => {
+      const inCycle = filteredMaintenance.filter(m => m.cycle === cycle);
+      return {
+        cycle,
+        total: inCycle.length,
+        done: inCycle.filter(m => m.status === 'Done').length,
+        pending: inCycle.filter(m => m.status === 'Pending').length,
+        overdue: inCycle.filter(m => m.status === 'Overdue').length,
+      };
+    });
 
-    const circleCriticalObservations = [
-      { circle: 'Gurugram Circle', count: 42 },
-      { circle: 'Rohtak Circle', count: 38 },
-      { circle: 'Hisar Circle', count: 32 },
-      { circle: 'Panipat Circle', count: 27 },
-      { circle: 'Ambala Circle', count: 26 },
-      { circle: 'Karnal Circle', count: 19 },
-      { circle: 'Rewari Circle', count: 14 },
-    ];
+    const circles = ['Gurugram Circle', 'Panipat Circle', 'Rohtak Circle', 'Karnal Circle', 'Ambala Circle', 'Faridabad Circle', 'Jind Circle'];
+    const circleCriticalObservations = circles.map(circle => ({
+      circle: circle.replace(' Circle', ''),
+      count: filteredObservations.filter(o => o.circle === circle && (o.severity === 'Critical' || o.status === 'Critical Pending')).length,
+    }));
 
     return {
       totalSubstations,
@@ -398,10 +444,10 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       cycleWiseMaintenance,
       circleCriticalObservations,
     };
-  }, [filters, filteredSubstations, filteredLines, filteredTransformers, filteredObservations]);
+  }, [filteredSubstations, filteredLines, filteredTransformers, filteredObservations, filteredMaintenance]);
 
-  // Actions
-  const addObservation = (newObs: Omit<Observation, 'id' | 'observationNo' | 'daysPending'>) => {
+  // Actions directly hitting Supabase (with snake_case fallback for DB schema compatibility)
+  const addObservation = async (newObs: Omit<Observation, 'id' | 'observationNo' | 'daysPending'>) => {
     const id = `OBS-${Date.now().toString().slice(-4)}`;
     const observationNo = `MP-${newObs.substation.slice(0, 3).toUpperCase()}-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
     const created: Observation = {
@@ -410,12 +456,66 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       observationNo,
       daysPending: 1,
     };
+
+    // Update UI immediately
     setObservationsList(prev => [created, ...prev]);
-    setFilterAppliedNotification(`New M&P Observation ${observationNo} logged successfully!`);
-    setTimeout(() => setFilterAppliedNotification(null), 4000);
+
+    // Try snake_case insertion first (standard PostgreSQL)
+    const snakeCasePayload = {
+      id: created.id,
+      observation_no: created.observationNo,
+      substation: created.substation,
+      circle: created.circle,
+      zone: created.zone,
+      voltage: created.voltage,
+      equipment: created.equipment,
+      equipment_type: created.equipmentType,
+      description: created.description,
+      severity: created.severity,
+      status: created.status,
+      reported_date: created.reportedDate,
+      due_date: created.dueDate,
+      days_pending: created.daysPending,
+      inspector_name: created.inspectorName,
+      assigned_engineer: created.assignedEngineer,
+      remarks: created.remarks,
+    };
+
+    let { error } = await supabase.from('observations').insert([snakeCasePayload]);
+    if (error && error.code === 'PGRST204') {
+      // Fallback to camelCase if table was created with quoted columns
+      const camelCasePayload = {
+        id: created.id,
+        observationNo: created.observationNo,
+        substation: created.substation,
+        circle: created.circle,
+        zone: created.zone,
+        voltage: created.voltage,
+        equipment: created.equipment,
+        equipmentType: created.equipmentType,
+        description: created.description,
+        severity: created.severity,
+        status: created.status,
+        reportedDate: created.reportedDate,
+        dueDate: created.dueDate,
+        daysPending: created.daysPending,
+        inspectorName: created.inspectorName,
+        assignedEngineer: created.assignedEngineer,
+        remarks: created.remarks,
+      };
+      const res = await supabase.from('observations').insert([camelCasePayload]);
+      error = res.error;
+    }
+
+    if (error) {
+      console.error('Supabase addObservation error:', error);
+    } else {
+      setFilterAppliedNotification(`New M&P Observation ${observationNo} saved to Supabase!`);
+      setTimeout(() => setFilterAppliedNotification(null), 4000);
+    }
   };
 
-  const updateObservationStatus = (id: string, status: ObservationStatus, remarks?: string) => {
+  const updateObservationStatus = async (id: string, status: ObservationStatus, remarks?: string) => {
     setObservationsList(prev =>
       prev.map(obs => {
         if (obs.id === id) {
@@ -429,52 +529,136 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return obs;
       })
     );
-    setFilterAppliedNotification(`Observation ${id} updated to ${status}.`);
+
+    let { error } = await supabase.from('observations').update({
+      status,
+      days_pending: status === 'Closed' ? 0 : undefined,
+      remarks: remarks || undefined,
+    }).eq('id', id);
+
+    if (error && error.code === 'PGRST204') {
+      const res = await supabase.from('observations').update({
+        status,
+        daysPending: status === 'Closed' ? 0 : undefined,
+        remarks: remarks || undefined,
+      }).eq('id', id);
+      error = res.error;
+    }
+
+    if (error) console.error('Supabase updateObservationStatus error:', error);
+
+    setFilterAppliedNotification(`Observation ${id} updated to ${status} in Supabase.`);
     setTimeout(() => setFilterAppliedNotification(null), 3000);
   };
 
-  const addMaintenanceRecord = (rec: Omit<MaintenanceRecord, 'id'>) => {
+  const addMaintenanceRecord = async (rec: Omit<MaintenanceRecord, 'id'>) => {
     const id = `MNT-${Date.now().toString().slice(-4)}`;
     const created: MaintenanceRecord = {
       ...rec,
       id,
     };
+
     setMaintenanceList(prev => [created, ...prev]);
-    setFilterAppliedNotification(`Maintenance task scheduled for ${rec.assetName}!`);
+
+    const snakePayload = {
+      id: created.id,
+      asset_type: created.assetType,
+      asset_name: created.assetName,
+      substation: created.substation,
+      circle: created.circle,
+      zone: created.zone,
+      cycle: created.cycle,
+      financial_year: created.financialYear,
+      status: created.status,
+      due_date: created.dueDate,
+      completion_date: created.completionDate,
+      engineer_in_charge: created.engineerInCharge,
+      remarks: created.remarks,
+    };
+
+    let { error } = await supabase.from('maintenance_records').insert([snakePayload]);
+    if (error && error.code === 'PGRST204') {
+      const camelPayload = {
+        id: created.id,
+        assetType: created.assetType,
+        assetName: created.assetName,
+        substation: created.substation,
+        circle: created.circle,
+        zone: created.zone,
+        cycle: created.cycle,
+        financialYear: created.financialYear,
+        status: created.status,
+        dueDate: created.dueDate,
+        completionDate: created.completionDate,
+        engineerInCharge: created.engineerInCharge,
+        remarks: created.remarks,
+      };
+      const res = await supabase.from('maintenance_records').insert([camelPayload]);
+      error = res.error;
+    }
+
+    if (error) console.error('Supabase addMaintenanceRecord error:', error);
+
+    setFilterAppliedNotification(`Maintenance task scheduled in Supabase for ${rec.assetName}!`);
     setTimeout(() => setFilterAppliedNotification(null), 3500);
   };
 
-  const markMaintenanceDone = (id: string) => {
+  const markMaintenanceDone = async (id: string) => {
+    const today = new Date().toISOString().split('T')[0];
     setMaintenanceList(prev =>
       prev.map(m => {
         if (m.id === id) {
           return {
             ...m,
             status: 'Done',
-            completionDate: new Date().toISOString().split('T')[0],
+            completionDate: today,
           };
         }
         return m;
       })
     );
-    setFilterAppliedNotification('Maintenance record marked as DONE.');
+
+    let { error } = await supabase.from('maintenance_records').update({
+      status: 'Done',
+      completion_date: today,
+    }).eq('id', id);
+
+    if (error && error.code === 'PGRST204') {
+      const res = await supabase.from('maintenance_records').update({
+        status: 'Done',
+        completionDate: today,
+      }).eq('id', id);
+      error = res.error;
+    }
+
+    if (error) console.error('Supabase markMaintenanceDone error:', error);
+
+    setFilterAppliedNotification('Maintenance record marked as DONE in Supabase.');
     setTimeout(() => setFilterAppliedNotification(null), 3000);
   };
 
-  const acknowledgeAlert = (id: string) => {
+  const acknowledgeAlert = async (id: string) => {
     setAlertsList(prev => prev.map(a => (a.id === id ? { ...a, acknowledged: true } : a)));
+    const { error } = await supabase.from('grid_alerts').update({ acknowledged: true }).eq('id', id);
+    if (error) console.error('Supabase acknowledgeAlert error:', error);
   };
 
-  const acknowledgeAllAlerts = () => {
+  const acknowledgeAllAlerts = async () => {
     setAlertsList(prev => prev.map(a => ({ ...a, acknowledged: true })));
+    const { error } = await supabase.from('grid_alerts').update({ acknowledged: true }).neq('id', '');
+    if (error) console.error('Supabase acknowledgeAllAlerts error:', error);
   };
 
-  const markNotificationRead = (id: string) => {
+  const markNotificationRead = async (id: string) => {
     setNotificationsList(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
+    const { error } = await supabase.from('notifications').update({ read: true }).eq('id', id);
+    if (error) console.error('Supabase markNotificationRead error:', error);
   };
 
-  const markAllNotificationsRead = () => {
+  const markAllNotificationsRead = async () => {
     setNotificationsList(prev => prev.map(n => ({ ...n, read: true })));
+    const { error } = await supabase.from('notifications').update({ read: true }).neq('id', '');
+    if (error) console.error('Supabase markAllNotificationsRead error:', error);
   };
 
   return (
@@ -499,6 +683,8 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         lastDataRefresh,
         triggerDataRefresh,
         isRefreshing,
+        isSupabaseConnected,
+        isLoading,
         substations: filteredSubstations,
         transmissionLines: filteredLines,
         transformers: filteredTransformers,

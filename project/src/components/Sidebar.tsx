@@ -6,7 +6,7 @@ import {
   FINANCIAL_YEARS,
   MAINTENANCE_CYCLES,
   VOLTAGES,
-} from '../data/mockData';
+} from '../constants/gridConstants';
 import {
   LayoutDashboard,
   ClipboardList,

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useDashboard } from '../../context/DashboardContext';
 import { InteractiveLoadCurve } from '../Charts/InteractiveLoadCurve';
-import { mockHistoricalTrends } from '../../data/mockData';
+import { mockHistoricalTrends } from '../../constants/gridConstants';
 import {
   Activity,
   Zap,

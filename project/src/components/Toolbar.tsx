@@ -6,7 +6,7 @@ import {
   FINANCIAL_YEARS,
   VOLTAGES,
   ZONES,
-} from '../data/mockData';
+} from '../constants/gridConstants';
 import { Map, Search, CheckCircle2, X } from 'lucide-react';
 
 export const Toolbar: React.FC = () => {

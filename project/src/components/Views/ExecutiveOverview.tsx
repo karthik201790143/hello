@@ -4,7 +4,7 @@ import { InteractiveDonut } from '../Charts/InteractiveDonut';
 import { InteractiveMiniBars } from '../Charts/InteractiveMiniBars';
 import { InteractiveStackedBars } from '../Charts/InteractiveStackedBars';
 import { NetworkMap } from '../Charts/NetworkMap';
-import { mockHistoricalTrends } from '../../data/mockData';
+import { mockHistoricalTrends } from '../../constants/gridConstants';
 import {
   RadioTower,
   Activity,

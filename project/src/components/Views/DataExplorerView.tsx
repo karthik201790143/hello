@@ -4,7 +4,7 @@ import {
   CIRCLES,
   VOLTAGES,
   ZONES,
-} from '../../data/mockData';
+} from '../../constants/gridConstants';
 import {
   Search,
   SlidersHorizontal,
